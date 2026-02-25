@@ -1,0 +1,16 @@
+[
+  {
+    "label": "Run supermario_gym_ai",
+    "command": "supermario-gym-ai",
+    "args": [],
+    "env": {},
+    "use_new_terminal": false,
+    "allow_concurrent_runs": false,
+    "reveal": "always",
+    "reveal_target": "dock",
+    "hide": "never",
+    "shell": "system",
+    "show_summary": true,
+    "show_command": true,
+  },
+]
