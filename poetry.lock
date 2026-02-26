@@ -1462,34 +1462,6 @@ test = ["build[virtualenv] (>=1.0.3)", "filelock (>=3.4.0)", "ini2toml[lite] (>=
 type = ["importlib_metadata (>=7.0.2) ; python_version < \"3.10\"", "jaraco.develop (>=7.21) ; sys_platform != \"cygwin\"", "mypy (==1.18.*)", "pytest-mypy"]
 
 [[package]]
-name = "shimmy"
-version = "2.0.0"
-description = "An API conversion tool providing Gymnasium and PettingZoo bindings for popular external reinforcement learning environments."
-optional = false
-python-versions = ">=3.8"
-groups = ["main"]
-files = [
-    {file = "Shimmy-2.0.0-py3-none-any.whl", hash = "sha256:4244e693b0ff28bd5ce55e73c636cab953df2a1fafe639718158ee6510613dfe"},
-    {file = "Shimmy-2.0.0.tar.gz", hash = "sha256:a42d07806fc1ca5460439cb4799f32d4855a9e1138b39a39031e72fb8460a508"},
-]
-
-[package.dependencies]
-gymnasium = ">=1.0.0a1"
-numpy = ">=1.18.0"
-
-[package.extras]
-all = ["bsuite (>=0.3.5)", "dm-control (>=1.0.10)", "dm-env (>=1.6)", "dm-meltingpot (>=2.2.2) ; python_version > \"3.10\"", "gym (>=0.26.2)", "h5py (>=3.7.0)", "imageio", "open-spiel (>=1.2)", "pettingzoo (>=1.23)"]
-bsuite = ["bsuite (>=0.3.5)"]
-dm-control = ["dm-control (>=1.0.10)", "h5py (>=3.7.0)", "imageio"]
-dm-control-multi-agent = ["dm-control (>=1.0.10)", "h5py (>=3.7.0)", "imageio", "pettingzoo (>=1.23)"]
-dm-lab = ["dm-env (>=1.6)"]
-gym-v21 = ["gym (>=0.21.0,<0.26)", "pyglet (==1.5.11)"]
-gym-v26 = ["gym (>=0.26.2)"]
-meltingpot = ["dm-meltingpot (>=2.2.2) ; python_version > \"3.10\"", "pettingzoo (>=1.23)"]
-openspiel = ["open-spiel (>=1.2)", "pettingzoo (>=1.23)"]
-testing = ["pillow (>=9.3.0)", "pytest (>=7.1.3)"]
-
-[[package]]
 name = "six"
 version = "1.17.0"
 description = "Python 2 and 3 compatibility utilities"
@@ -1750,4 +1722,4 @@ watchdog = ["watchdog (>=2.3)"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.11,<3.12"
-content-hash = "457e2349ed326445d2dd681d0e4b80d07a4ff6ff30d9d218fb46745cd6c5f01f"
+content-hash = "4ab9c8a9c304891d2441b4ff3069bdb134026a525504fd70df3c60ef468ebc38"

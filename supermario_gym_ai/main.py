@@ -3,7 +3,7 @@ import numpy as np
 import gymnasium as gym
 from gymnasium import spaces
 from gymnasium.spaces import Box, Discrete
-
+import gym as gym_old
 from stable_baselines3 import PPO
 from stable_baselines3.common.vec_env import DummyVecEnv, VecFrameStack
 from stable_baselines3.common.callbacks import BaseCallback
@@ -60,6 +60,32 @@ class CustomGrayScaleResize(gym.ObservationWrapper):
         return np.expand_dims(resized, -1)
 
 
+class SkipFrame(gym_old.Wrapper):
+    def __init__(self, env, skip=4):
+        super().__init__(env)
+        self._skip = skip
+
+    def step(self, action):
+        total_reward = 0.0
+        done = False
+        info = {}
+        for _ in range(self._skip):
+            obs, reward, done, info = self.env.step(action)
+            try:
+                import cv2
+                frame_bgr = cv2.cvtColor(obs, cv2.COLOR_RGB2BGR)
+                frame_resized = cv2.resize(frame_bgr, (1024, 960), interpolation=cv2.INTER_NEAREST)
+                cv2.imshow("Super Mario Bros AI - 4x Scaled", frame_resized)
+                cv2.waitKey(1)
+            except Exception:
+                pass
+            total_reward += reward
+            if done:
+                break
+        return obs, total_reward, done, info
+
+
+
 class TrainAndLoggingCallback(BaseCallback):
     def __init__(self, check_freq, save_path, verbose=1):
         super(TrainAndLoggingCallback, self).__init__(verbose)
@@ -99,10 +125,16 @@ def make_env():
     # 2. Applica JoypadSpace
     env = JoypadSpace(env, SIMPLE_MOVEMENT)
 
-    # 3. Adatta a Gymnasium
+    # 3. Applica SkipFrame PRIMA dell'adattatore Gymnasium se possibile, ma l'adattatore
+    # Gymnasium vuole un env che restituisce 4 valori dallo step, e SkipFrame
+    # ne restituisce 4 (obs, reward, done, info).
+    env = SkipFrame(env, skip=4)
+
+    # 4. Adatta a Gymnasium
     env = MarioGymnasiumAdapter(env)
 
-    # 4. Preprocessing
+
+    # 5. Preprocessing
     env = CustomGrayScaleResize(env, shape=84)
 
     return env
@@ -118,7 +150,7 @@ def run():
 
     callback = TrainAndLoggingCallback(check_freq=10000, save_path=CHECKPOINT_DIR)
 
-    model = PPO("CnnPolicy", env, verbose=1, tensorboard_log=LOG_DIR, learning_rate=1e-6, n_steps=512)
+    model = PPO("CnnPolicy", env, verbose=1, tensorboard_log=LOG_DIR, learning_rate=1e-5, n_steps=512, batch_size=64, n_epochs=10)
 
     print("Inizio l'addestramento...")
     model.learn(total_timesteps=100000, callback=callback)
