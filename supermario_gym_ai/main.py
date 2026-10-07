@@ -1,162 +1,152 @@
-import os
+import argparse
+import time
+
+import cv2
 import numpy as np
-import gymnasium as gym
-from gymnasium import spaces
-from gymnasium.spaces import Box, Discrete
-import gym as gym_old
-from stable_baselines3 import PPO
-from stable_baselines3.common.vec_env import DummyVecEnv, VecFrameStack
-from stable_baselines3.common.callbacks import BaseCallback
+import torch
+from PIL import Image
+from huggingface_hub import hf_hub_download
+from transformers import AutoImageProcessor
 
 import gym_super_mario_bros
-from gym_super_mario_bros.actions import SIMPLE_MOVEMENT
-from nes_py.wrappers import JoypadSpace
+from nitrogen.cfg import CkptConfig
+from nitrogen.flow_matching_transformer.nitrogen import NitroGen
+from nitrogen.mm_tokenizers import NitrogenTokenizer
+from nitrogen.shared import BUTTON_ACTION_TOKENS
 
 
-# --- ADATTATORE ---
-class MarioGymnasiumAdapter(gym.Env):
-    def __init__(self, env):
-        self.env = env
-        # Conversione Action Space
-        self.action_space = Discrete(env.action_space.n)
-        # Conversione Observation Space
-        self.observation_space = Box(low=0, high=255, shape=env.observation_space.shape, dtype=np.uint8)
-        self.metadata = env.metadata
+# --- BOTTONI NES (byte del controller di nes-py) ---
+NES_A = 0b00000001
+NES_B = 0b00000010
+NES_DOWN = 0b00100000
+NES_LEFT = 0b01000000
+NES_RIGHT = 0b10000000
 
-    def reset(self, seed=None, options=None):
-        if seed is not None:
-            try:
-                self.env.seed(seed)
-            except AttributeError:
-                pass  # Alcuni env vecchi non hanno seed
-        obs = self.env.reset()
-        return obs, {}
-
-    def step(self, action):
-        obs, reward, done, info = self.env.step(action)
-        return obs, reward, done, False, info
-
-    def render(self):
-        return self.env.render()
-
-    def close(self):
-        self.env.close()
+BUTTON_PRESS_THRES = 0.5
+STICK_THRES = 0.5
+BTN = {name: i for i, name in enumerate(BUTTON_ACTION_TOKENS)}
 
 
-# --- PREPROCESSING ---
-class CustomGrayScaleResize(gym.ObservationWrapper):
-    def __init__(self, env, shape=(84, 84)):
-        super().__init__(env)
-        if isinstance(shape, int):
-            shape = (shape, shape)
-        self.shape = shape
-        self.observation_space = Box(low=0, high=255, shape=(self.shape[0], self.shape[1], 1), dtype=np.uint8)
+# --- MODELLO (versione CPU di nitrogen.inference_session) ---
+class NitroGenPolicy:
+    def __init__(self, ckpt_path, device="cpu"):
+        checkpoint = torch.load(ckpt_path, map_location="cpu", weights_only=False)
+        ckpt_config = CkptConfig.model_validate(checkpoint["ckpt_config"])
+        ckpt_config.tokenizer_cfg.training = False
 
-    def observation(self, observation):
-        import cv2
+        self.device = torch.device(device)
+        self.img_proc = AutoImageProcessor.from_pretrained(ckpt_config.model_cfg.vision_encoder_name)
+        self.tokenizer = NitrogenTokenizer(ckpt_config.tokenizer_cfg)
+        self.model = NitroGen(config=ckpt_config.model_cfg, game_mapping=self.tokenizer.game_mapping)
+        self.model.load_state_dict(checkpoint["model"])
+        self.model.eval().to(self.device)
+        self.tokenizer.eval()
 
-        gray = cv2.cvtColor(observation, cv2.COLOR_RGB2GRAY)
-        resized = cv2.resize(gray, self.shape, interpolation=cv2.INTER_AREA)
-        return np.expand_dims(resized, -1)
+    def predict(self, frame_rgb):
+        """Frame RGB (H, W, 3) -> chunk di azioni gamepad (j_left, j_right, buttons)."""
+        image = Image.fromarray(cv2.resize(frame_rgb, (256, 256), interpolation=cv2.INTER_AREA))
+        pixel_values = self.img_proc([image], return_tensors="pt")["pixel_values"].to(self.device)
 
+        data = {
+            "frames": pixel_values,
+            "dropped_frames": torch.zeros((1,), dtype=torch.bool, device=self.device),
+            "game": None,
+        }
+        tokenized = self.tokenizer.encode(data)
+        for k, v in tokenized.items():
+            if isinstance(v, torch.Tensor):
+                tokenized[k] = v.unsqueeze(0).to(self.device)
+            elif isinstance(v, np.ndarray):
+                tokenized[k] = torch.tensor(v, device=self.device).unsqueeze(0)
+            else:
+                tokenized[k] = [v]
 
-class SkipFrame(gym_old.Wrapper):
-    def __init__(self, env, skip=4):
-        super().__init__(env)
-        self._skip = skip
-
-    def step(self, action):
-        total_reward = 0.0
-        done = False
-        info = {}
-        for _ in range(self._skip):
-            obs, reward, done, info = self.env.step(action)
-            try:
-                import cv2
-                frame_bgr = cv2.cvtColor(obs, cv2.COLOR_RGB2BGR)
-                frame_resized = cv2.resize(frame_bgr, (1024, 960), interpolation=cv2.INTER_NEAREST)
-                cv2.imshow("Super Mario Bros AI - 4x Scaled", frame_resized)
-                cv2.waitKey(1)
-            except Exception:
-                pass
-            total_reward += reward
-            if done:
-                break
-        return obs, total_reward, done, info
+        with torch.inference_mode():
+            pred = self.tokenizer.decode(self.model.get_action(tokenized))
+        return {k: v.squeeze().float().cpu().numpy() for k, v in pred.items()}
 
 
-
-class TrainAndLoggingCallback(BaseCallback):
-    def __init__(self, check_freq, save_path, verbose=1):
-        super(TrainAndLoggingCallback, self).__init__(verbose)
-        self.check_freq = check_freq
-        self.save_path = save_path
-
-    def _init_callback(self):
-        if self.save_path is not None:
-            os.makedirs(self.save_path, exist_ok=True)
-
-    def _on_step(self):
-        if self.n_calls % self.check_freq == 0:
-            model_path = os.path.join(self.save_path, f"best_model_{self.n_calls}")
-            self.model.save(model_path)
-        return True
-
-
-def make_env():
-    # 1. Crea ambiente originale
-    env = gym_super_mario_bros.make("SuperMarioBros-v0")
-
-    # FIX CRITICO: Rimuovi wrapper TimeLimit se usa la nuova API su vecchio env
-    # Scendiamo fino a trovare l'ambiente base o rimuoviamo TimeLimit
-    while hasattr(env, "env"):
-        if "TimeLimit" in str(type(env)):
-            # Trovato il colpevole! Lo rimuoviamo prendendo l'env interno
-            env = env.env
-        else:
-            # Continuiamo a scendere (es. se c'è altro wrapper)
-            # Ma attenzione a non scendere troppo se JoypadSpace deve essere applicato DOPO.
-            # JoypadSpace va applicato all'env NES nudo.
-            # Ma gym.make restituisce TimeLimit(NesEnv).
-            break
-
-    # Se abbiamo rimosso troppi wrapper, non importa, Mario ha i suoi limiti interni di tempo.
-
-    # 2. Applica JoypadSpace
-    env = JoypadSpace(env, SIMPLE_MOVEMENT)
-
-    # 3. Applica SkipFrame PRIMA dell'adattatore Gymnasium se possibile, ma l'adattatore
-    # Gymnasium vuole un env che restituisce 4 valori dallo step, e SkipFrame
-    # ne restituisce 4 (obs, reward, done, info).
-    env = SkipFrame(env, skip=4)
-
-    # 4. Adatta a Gymnasium
-    env = MarioGymnasiumAdapter(env)
+# --- GAMEPAD -> NES ---
+def to_nes_actions(pred):
+    """Converte il chunk di azioni gamepad nei byte del controller NES."""
+    actions = []
+    for (lx, ly), buttons in zip(pred["j_left"], pred["buttons"]):
+        pressed = lambda name: buttons[BTN[name]] > BUTTON_PRESS_THRES
+        byte = 0
+        if pressed("DPAD_RIGHT") or lx > STICK_THRES:
+            byte |= NES_RIGHT
+        elif pressed("DPAD_LEFT") or lx < -STICK_THRES:
+            byte |= NES_LEFT
+        if pressed("DPAD_DOWN"):
+            byte |= NES_DOWN
+        # Salto: tasto in basso (Xbox A) o a destra (layout Nintendo A)
+        if pressed("SOUTH") or pressed("EAST"):
+            byte |= NES_A
+        # Corsa: tasti a sinistra / in alto
+        if pressed("WEST") or pressed("NORTH"):
+            byte |= NES_B
+        actions.append(byte)
+    return actions
 
 
-    # 5. Preprocessing
-    env = CustomGrayScaleResize(env, shape=84)
-
-    return env
+def describe(byte):
+    names = [("RIGHT", NES_RIGHT), ("LEFT", NES_LEFT), ("DOWN", NES_DOWN), ("A", NES_A), ("B", NES_B)]
+    return "+".join(n for n, b in names if byte & b) or "noop"
 
 
 def run():
-    CHECKPOINT_DIR = "./train/"
-    LOG_DIR = "./logs/"
+    parser = argparse.ArgumentParser(description="Super Mario Bros giocato zero-shot da NVIDIA NitroGen")
+    parser.add_argument("--level", default="SuperMarioBros-1-1-v0")
+    parser.add_argument("--episodes", type=int, default=1)
+    parser.add_argument("--execute", type=int, default=18, help="Azioni del chunk eseguite prima di ripianificare (max 18)")
+    parser.add_argument("--max-chunks", type=int, default=400)
+    parser.add_argument("--threads", type=int, default=8)
+    parser.add_argument("--no-render", action="store_true")
+    parser.add_argument("--video", default=None, help="Salva la partita in un file .mp4")
+    args = parser.parse_args()
 
-    # 4. Vettorializzazione e Stack
-    env = DummyVecEnv([make_env])
-    env = VecFrameStack(env, n_stack=4, channels_order="last")
+    torch.set_num_threads(args.threads)
+    print("Caricamento NitroGen...")
+    policy = NitroGenPolicy(hf_hub_download("nvidia/NitroGen", "ng.pt"))
 
-    callback = TrainAndLoggingCallback(check_freq=10000, save_path=CHECKPOINT_DIR)
+    # Env NES grezzo: azione = byte del controller, 1 step = 1 frame (60 fps)
+    # .unwrapped toglie il TimeLimit di gym, incompatibile con la vecchia API a 4 valori
+    env = gym_super_mario_bros.make(args.level).unwrapped
+    writer = None
+    if args.video:
+        writer = cv2.VideoWriter(args.video, cv2.VideoWriter_fourcc(*"mp4v"), 60, (256, 240))
 
-    model = PPO("CnnPolicy", env, verbose=1, tensorboard_log=LOG_DIR, learning_rate=1e-5, n_steps=512, batch_size=64, n_epochs=10)
+    for episode in range(args.episodes):
+        obs = env.reset()
+        done, info, max_x, latencies = False, {}, 0, []
+        for chunk in range(args.max_chunks):
+            t = time.time()
+            actions = to_nes_actions(policy.predict(obs))[: args.execute]
+            latencies.append(time.time() - t)
 
-    print("Inizio l'addestramento...")
-    model.learn(total_timesteps=100000, callback=callback)
+            for byte in actions:
+                obs, _, done, info = env.step(byte)
+                frame_bgr = cv2.cvtColor(obs, cv2.COLOR_RGB2BGR)
+                if writer is not None:
+                    writer.write(frame_bgr)
+                if not args.no_render:
+                    cv2.imshow("Super Mario Bros - NitroGen", cv2.resize(frame_bgr, (768, 720), interpolation=cv2.INTER_NEAREST))
+                    cv2.waitKey(1)
+                if done:
+                    break
 
-    model.save("mario_final_model")
-    print("Modello salvato!")
+            max_x = max(max_x, info.get("x_pos", 0))
+            print(f"[ep {episode} chunk {chunk:3d}] {latencies[-1]:.2f}s  x={info.get('x_pos')}  "
+                  f"vite={info.get('life')}  azioni={describe(actions[0])}..{describe(actions[-1])}")
+            if done or info.get("flag_get"):
+                break
+
+        print(f"Episodio {episode}: x massimo={max_x}  bandiera={info.get('flag_get', False)}  "
+              f"latenza media={np.mean(latencies):.2f}s")
+
+    if writer is not None:
+        writer.release()
+    env.close()
 
 
 if __name__ == "__main__":

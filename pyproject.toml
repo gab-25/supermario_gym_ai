@@ -1,20 +1,24 @@
 [project]
 name = "supermario-gym-ai"
 version = "0.1.0"
-description = ""
+description = "Super Mario Bros giocato zero-shot da NVIDIA NitroGen"
 authors = [
     {name = "gab-25",email = "gabrielesorci.25@gmail.com"}
 ]
 readme = "README.md"
 requires-python = ">=3.11,<3.12"
 dependencies = [
-    "gymnasium>=0.29.1",
-    "stable-baselines3>=2.3.0",
     "gym-super-mario-bros==7.4.0",
     "nes-py==8.2.1",
     "opencv-python>=4.8.0",
-    "tensorboard>=2.15.0",
     "numpy<2.0.0",
+    "torch",
+    "pillow",
+    "huggingface-hub",
+    "nitrogen",
+    # NitroGen usa SiglipVisionModel.vision_model, rimosso in transformers 5
+    "transformers>=4.48,<5",
+    "diffusers<0.37",
 ]
 
 [project.scripts]
@@ -24,3 +28,6 @@ supermario-gym-ai = 'supermario_gym_ai.main:run'
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.uv.sources]
+nitrogen = { git = "https://github.com/MineDojo/NitroGen", rev = "3260844" }
