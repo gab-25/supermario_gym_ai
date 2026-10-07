@@ -1,5 +1,6 @@
 import argparse
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 import cv2
 import numpy as np
@@ -116,29 +117,50 @@ def run():
     if args.video:
         writer = cv2.VideoWriter(args.video, cv2.VideoWriter_fourcc(*"mp4v"), 60, (256, 240))
 
+    def timed_predict(frame):
+        t = time.time()
+        pred = policy.predict(frame)
+        return pred, time.time() - t
+
+    # Il modello gira in un thread separato: mentre calcola il chunk successivo,
+    # la finestra mostra i frame del chunk appena emulato distribuiti sul tempo
+    # di inferenza (rallentatore fluido invece di blocco + scatto)
+    executor = ThreadPoolExecutor(max_workers=1)
+
     for episode in range(args.episodes):
         obs = env.reset()
         done, info, max_x, latencies = False, {}, 0, []
+        pending = executor.submit(timed_predict, obs)
         for chunk in range(args.max_chunks):
-            t = time.time()
-            actions = to_nes_actions(policy.predict(obs))[: args.execute]
-            latencies.append(time.time() - t)
+            pred, latency = pending.result()
+            latencies.append(latency)
+            actions = to_nes_actions(pred)[: args.execute]
 
+            # L'emulatore esegue il chunk all'istante, i frame si mostrano dopo
+            frames = []
             for byte in actions:
                 obs, _, done, info = env.step(byte)
-                frame_bgr = cv2.cvtColor(obs, cv2.COLOR_RGB2BGR)
-                if writer is not None:
-                    writer.write(frame_bgr)
-                if not args.no_render:
-                    cv2.imshow("Super Mario Bros - NitroGen", cv2.resize(frame_bgr, (768, 720), interpolation=cv2.INTER_NEAREST))
-                    cv2.waitKey(1)
+                frames.append(cv2.cvtColor(obs, cv2.COLOR_RGB2BGR))
                 if done:
                     break
+            if writer is not None:
+                for frame_bgr in frames:
+                    writer.write(frame_bgr)
+
+            finished = done or info.get("flag_get") or chunk == args.max_chunks - 1
+            if not finished:
+                pending = executor.submit(timed_predict, obs)
+
+            if not args.no_render:
+                delay_ms = max(1, int(latency * 1000 / len(frames)))
+                for frame_bgr in frames:
+                    cv2.imshow("Super Mario Bros - NitroGen", cv2.resize(frame_bgr, (768, 720), interpolation=cv2.INTER_NEAREST))
+                    cv2.waitKey(delay_ms)
 
             max_x = max(max_x, info.get("x_pos", 0))
-            print(f"[ep {episode} chunk {chunk:3d}] {latencies[-1]:.2f}s  x={info.get('x_pos')}  "
+            print(f"[ep {episode} chunk {chunk:3d}] {latency:.2f}s  x={info.get('x_pos')}  "
                   f"vite={info.get('life')}  azioni={describe(actions[0])}..{describe(actions[-1])}")
-            if done or info.get("flag_get"):
+            if finished:
                 break
 
         print(f"Episodio {episode}: x massimo={max_x}  bandiera={info.get('flag_get', False)}  "
@@ -146,6 +168,7 @@ def run():
 
     if writer is not None:
         writer.release()
+    executor.shutdown()
     env.close()
 
 
