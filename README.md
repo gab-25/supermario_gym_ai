@@ -12,7 +12,7 @@ Super Mario Bros (NES) played **zero-shot**, with no training, by [NVIDIA NitroG
    - WEST/NORTH → B (run)
 4. The actions are executed in `gym-super-mario-bros`, then the loop repeats from step 1.
 
-With `--samples K` (K > 1) NitroGen proposes K different chunks for the same frame. The emulator saves its state, previews each chunk (plus a few no-input frames to catch deaths that are already decided, like falling into a pit), rewinds, and plays the best one: the flag first, then survival, then distance. The actions always come from NitroGen; the emulator only filters out the deadly ones. If Mario makes no progress for `--stuck-steps` steps (default 3), the number of proposals is doubled each step, up to `--max-samples` (default 16), so that one of them is more likely to clear the obstacle.
+With `--samples K` (K > 1) NitroGen proposes K different chunks for the same frame. The emulator saves its state, previews each chunk (plus a few no-input frames to catch deaths that are already decided, like falling into a pit), rewinds, and plays the best one: the flag first, then survival, then distance. The actions always come from NitroGen; the emulator only filters out the deadly ones. If Mario advances less than `--min-progress` pixels per step (default 16, one block) for `--stuck-steps` steps (default 3), the number of proposals is doubled each step, up to `--max-samples` (default 16), so that one of them is more likely to clear the obstacle. Likewise, when none of the proposals survives the preview, more are requested (4 → 8 → 16) before an action is played.
 
 While the model computes the next chunk, the window plays the frames of the previous one in slow motion, so the display does not freeze.
 

@@ -138,6 +138,8 @@ def run():
     parser.add_argument("--stuck-steps", type=int, default=3,
                         help="Steps without progress after which the number of samples is doubled")
     parser.add_argument("--max-samples", type=int, default=16, help="Upper bound for samples when stuck")
+    parser.add_argument("--min-progress", type=int, default=16,
+                        help="Pixels Mario must advance per step not to count as stuck (16 = one block)")
     args = parser.parse_args()
 
     torch.set_num_threads(args.threads)
@@ -170,15 +172,23 @@ def run():
         pending = executor.submit(timed_predict, obs, num_samples)
         for chunk in range(args.max_chunks):
             preds, latency = pending.result()
-            latencies.append(latency)
             candidates = [to_nes_actions(pred)[: args.execute] for pred in preds]
             if len(candidates) > 1:
                 scores = [rollout_score(env, c, args.tail) for c in candidates]
+                # No proposal survives: ask for as many more again (4 -> 8 -> 16)
+                # before committing to an action
+                while not any(s[1] and s[2] for s in scores) and len(candidates) < args.max_samples:
+                    more, extra_latency = timed_predict(obs, min(len(candidates), args.max_samples - len(candidates)))
+                    latency += extra_latency
+                    new = [to_nes_actions(pred)[: args.execute] for pred in more]
+                    candidates += new
+                    scores += [rollout_score(env, c, args.tail) for c in new]
                 best = max(range(len(candidates)), key=lambda i: scores[i])
                 safe = sum(s[1] and s[2] for s in scores)
             else:
                 best, safe = 0, None
             actions = candidates[best]
+            latencies.append(latency)
 
             # The emulator runs the chunk instantly, frames are shown afterwards
             frames = []
@@ -193,11 +203,14 @@ def run():
 
             # When Mario stops advancing, ask NitroGen for more proposals so that
             # one of them is more likely to clear the obstacle
+            # Creeping forward a few pixels per step (e.g. hesitating at a pit edge)
+            # counts as stuck too
             x = info.get("x_pos", 0)
-            if x > max_x:
-                max_x, stalled = x, 0
+            if x >= max_x + args.min_progress:
+                stalled = 0
             else:
                 stalled += 1
+            max_x = max(max_x, x)
             if args.samples > 1 and stalled >= args.stuck_steps:
                 num_samples = min(args.samples * 2 ** (stalled - args.stuck_steps + 1), args.max_samples)
             else:
