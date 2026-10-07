@@ -1,7 +1,7 @@
 [project]
 name = "supermario-gym-ai"
 version = "0.1.0"
-description = "Super Mario Bros giocato zero-shot da NVIDIA NitroGen"
+description = "Super Mario Bros played zero-shot by NVIDIA NitroGen"
 authors = [
     {name = "gab-25",email = "gabrielesorci.25@gmail.com"}
 ]
@@ -9,15 +9,16 @@ readme = "README.md"
 requires-python = ">=3.11,<3.12"
 dependencies = [
     "gym-super-mario-bros==7.4.0",
-    "nes-py==8.2.1",
     "opencv-python>=4.8.0",
+    # gym-super-mario-bros depends on the old gym, which does not support NumPy 2
     "numpy<2.0.0",
     "torch",
     "pillow",
     "huggingface-hub",
     "nitrogen",
-    # NitroGen usa SiglipVisionModel.vision_model, rimosso in transformers 5
+    # NitroGen uses SiglipVisionModel.vision_model, removed in transformers 5
     "transformers>=4.48,<5",
+    # transformers 4.x needs huggingface-hub<1, which newer diffusers drop
     "diffusers<0.37",
 ]
 

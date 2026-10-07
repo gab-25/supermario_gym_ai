@@ -1,31 +1,33 @@
 # supermario_gym_ai
 
-Super Mario Bros (NES) giocato **zero-shot**, senza addestramento, da [NVIDIA NitroGen](https://huggingface.co/nvidia/NitroGen): un modello vision-to-action che legge il frame di gioco e restituisce i comandi del gamepad.
+Super Mario Bros (NES) played **zero-shot**, with no training, by [NVIDIA NitroGen](https://huggingface.co/nvidia/NitroGen): a vision-to-action model that reads the game frame and outputs gamepad actions.
 
-## Come funziona
+## How it works
 
-1. Il frame NES (256×240) viene ridimensionato a 256×256 e passato a NitroGen, che gira in CPU.
-2. NitroGen restituisce un blocco di 18 azioni gamepad, una per frame a 60 fps.
-3. Ogni azione viene tradotta in un byte del controller NES:
-   - stick o croce direzionale → destra/sinistra/giù
-   - SOUTH/EAST → A (salto)
-   - WEST/NORTH → B (corsa)
-4. Le azioni vengono eseguite in `gym-super-mario-bros`, poi si ripete dal punto 1.
+1. The NES frame (256×240) is resized to 256×256 and fed to NitroGen, running on CPU.
+2. NitroGen returns a chunk of 18 gamepad actions, one per frame at 60 fps.
+3. Each action is mapped to an NES controller byte:
+   - stick or D-pad → right/left/down
+   - SOUTH/EAST → A (jump)
+   - WEST/NORTH → B (run)
+4. The actions are executed in `gym-super-mario-bros`, then the loop repeats from step 1.
 
-Il checkpoint (`ng.pt`, ~2 GB) viene scaricato da Hugging Face al primo avvio.
+While the model computes the next chunk, the window plays the frames of the previous one in slow motion, so the display does not freeze.
 
-## Uso
+The checkpoint (`ng.pt`, ~2 GB) is downloaded from Hugging Face on first run.
+
+## Usage
 
 ```bash
 uv sync
-uv run supermario-gym-ai                          # 1 partita su 1-1, con finestra
+uv run supermario-gym-ai                          # 1 episode on 1-1, with window
 uv run supermario-gym-ai --episodes 5 --no-render
-uv run supermario-gym-ai --execute 6              # ripianifica ogni 6 frame invece di 18
-uv run supermario-gym-ai --video partita.mp4
+uv run supermario-gym-ai --execute 6              # replan every 6 frames instead of 18
+uv run supermario-gym-ai --video gameplay.mp4
 ```
 
-Ogni chiamata al modello richiede circa 3.5 s su una CPU a 8 core e copre 0.3 s di gioco.
+Each model call takes ~3.5–4.5 s on an 8-core CPU and covers 0.3 s of gameplay. The process uses ~2.6 GB of RAM.
 
-## Licenza del modello
+## Model license
 
-NitroGen è distribuito con la [NVIDIA Non-Commercial License](https://developer.download.nvidia.com/licenses/NVIDIA-OneWay-Noncommercial-License-22Mar2022.pdf): solo uso non commerciale.
+NitroGen is released under the [NVIDIA Non-Commercial License](https://developer.download.nvidia.com/licenses/NVIDIA-OneWay-Noncommercial-License-22Mar2022.pdf): non-commercial use only.

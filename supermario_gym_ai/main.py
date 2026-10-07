@@ -16,7 +16,7 @@ from nitrogen.mm_tokenizers import NitrogenTokenizer
 from nitrogen.shared import BUTTON_ACTION_TOKENS
 
 
-# --- BOTTONI NES (byte del controller di nes-py) ---
+# --- NES BUTTONS (nes-py controller byte) ---
 NES_A = 0b00000001
 NES_B = 0b00000010
 NES_DOWN = 0b00100000
@@ -28,7 +28,7 @@ STICK_THRES = 0.5
 BTN = {name: i for i, name in enumerate(BUTTON_ACTION_TOKENS)}
 
 
-# --- MODELLO (versione CPU di nitrogen.inference_session) ---
+# --- MODEL (CPU version of nitrogen.inference_session) ---
 class NitroGenPolicy:
     def __init__(self, ckpt_path, device="cpu"):
         checkpoint = torch.load(ckpt_path, map_location="cpu", weights_only=False)
@@ -44,7 +44,7 @@ class NitroGenPolicy:
         self.tokenizer.eval()
 
     def predict(self, frame_rgb):
-        """Frame RGB (H, W, 3) -> chunk di azioni gamepad (j_left, j_right, buttons)."""
+        """RGB frame (H, W, 3) -> chunk of gamepad actions (j_left, j_right, buttons)."""
         image = Image.fromarray(cv2.resize(frame_rgb, (256, 256), interpolation=cv2.INTER_AREA))
         pixel_values = self.img_proc([image], return_tensors="pt")["pixel_values"].to(self.device)
 
@@ -69,7 +69,7 @@ class NitroGenPolicy:
 
 # --- GAMEPAD -> NES ---
 def to_nes_actions(pred):
-    """Converte il chunk di azioni gamepad nei byte del controller NES."""
+    """Convert a chunk of gamepad actions into NES controller bytes."""
     actions = []
     for (lx, ly), buttons in zip(pred["j_left"], pred["buttons"]):
         pressed = lambda name: buttons[BTN[name]] > BUTTON_PRESS_THRES
@@ -80,10 +80,10 @@ def to_nes_actions(pred):
             byte |= NES_LEFT
         if pressed("DPAD_DOWN"):
             byte |= NES_DOWN
-        # Salto: tasto in basso (Xbox A) o a destra (layout Nintendo A)
+        # Jump: bottom face button (Xbox A) or right face button (Nintendo A)
         if pressed("SOUTH") or pressed("EAST"):
             byte |= NES_A
-        # Corsa: tasti a sinistra / in alto
+        # Run: left / top face buttons
         if pressed("WEST") or pressed("NORTH"):
             byte |= NES_B
         actions.append(byte)
@@ -96,22 +96,22 @@ def describe(byte):
 
 
 def run():
-    parser = argparse.ArgumentParser(description="Super Mario Bros giocato zero-shot da NVIDIA NitroGen")
+    parser = argparse.ArgumentParser(description="Super Mario Bros played zero-shot by NVIDIA NitroGen")
     parser.add_argument("--level", default="SuperMarioBros-1-1-v0")
     parser.add_argument("--episodes", type=int, default=1)
-    parser.add_argument("--execute", type=int, default=18, help="Azioni del chunk eseguite prima di ripianificare (max 18)")
+    parser.add_argument("--execute", type=int, default=18, help="Actions of each chunk executed before replanning (max 18)")
     parser.add_argument("--max-chunks", type=int, default=400)
     parser.add_argument("--threads", type=int, default=8)
     parser.add_argument("--no-render", action="store_true")
-    parser.add_argument("--video", default=None, help="Salva la partita in un file .mp4")
+    parser.add_argument("--video", default=None, help="Save the gameplay to an .mp4 file")
     args = parser.parse_args()
 
     torch.set_num_threads(args.threads)
-    print("Caricamento NitroGen...")
+    print("Loading NitroGen...")
     policy = NitroGenPolicy(hf_hub_download("nvidia/NitroGen", "ng.pt"))
 
-    # Env NES grezzo: azione = byte del controller, 1 step = 1 frame (60 fps)
-    # .unwrapped toglie il TimeLimit di gym, incompatibile con la vecchia API a 4 valori
+    # Raw NES env: action = controller byte, 1 step = 1 frame (60 fps)
+    # .unwrapped strips gym's TimeLimit, incompatible with the old 4-value step API
     env = gym_super_mario_bros.make(args.level).unwrapped
     writer = None
     if args.video:
@@ -122,9 +122,9 @@ def run():
         pred = policy.predict(frame)
         return pred, time.time() - t
 
-    # Il modello gira in un thread separato: mentre calcola il chunk successivo,
-    # la finestra mostra i frame del chunk appena emulato distribuiti sul tempo
-    # di inferenza (rallentatore fluido invece di blocco + scatto)
+    # The model runs in a worker thread: while it computes the next chunk, the
+    # window shows the frames of the chunk just emulated, spread over the
+    # inference time (smooth slow motion instead of freeze + jump)
     executor = ThreadPoolExecutor(max_workers=1)
 
     for episode in range(args.episodes):
@@ -136,7 +136,7 @@ def run():
             latencies.append(latency)
             actions = to_nes_actions(pred)[: args.execute]
 
-            # L'emulatore esegue il chunk all'istante, i frame si mostrano dopo
+            # The emulator runs the chunk instantly, frames are shown afterwards
             frames = []
             for byte in actions:
                 obs, _, done, info = env.step(byte)
@@ -159,12 +159,12 @@ def run():
 
             max_x = max(max_x, info.get("x_pos", 0))
             print(f"[ep {episode} chunk {chunk:3d}] {latency:.2f}s  x={info.get('x_pos')}  "
-                  f"vite={info.get('life')}  azioni={describe(actions[0])}..{describe(actions[-1])}")
+                  f"lives={info.get('life')}  actions={describe(actions[0])}..{describe(actions[-1])}")
             if finished:
                 break
 
-        print(f"Episodio {episode}: x massimo={max_x}  bandiera={info.get('flag_get', False)}  "
-              f"latenza media={np.mean(latencies):.2f}s")
+        print(f"Episode {episode}: max x={max_x}  flag={info.get('flag_get', False)}  "
+              f"mean latency={np.mean(latencies):.2f}s")
 
     if writer is not None:
         writer.release()
